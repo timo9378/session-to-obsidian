@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "session-to-obsidian"
+version = "0.1.0"
+description = "把 Claude Code / GitHub Copilot 對話 session 變成 Obsidian 裡依語意主題分區、可翻找、可給 Claude compact 後回想的回顧筆記"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "timo9378" }]
+keywords = ["claude-code", "copilot", "obsidian", "llm", "knowledge-management"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+]
+dependencies = []  # 純標準函式庫;語意分群靠本機 `claude` CLI(選用)
+
+[project.scripts]
+s2o = "s2o.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/timo9378/session-to-obsidian"
+
+[tool.hatch.build.targets.wheel]
+packages = ["s2o"]
