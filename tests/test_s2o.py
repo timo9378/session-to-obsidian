@@ -4,11 +4,13 @@
 import json
 
 from s2o.parse import Step, clean, parse_records, dump_intents
-from s2o.render import demote_headings
+from s2o.render import demote_headings, render
 from s2o.slugs import title_slug, session_slug
-from s2o.cluster import normalize, _extract_json
+from s2o.cluster import normalize, _extract_json, ClusterError
 from s2o.adapters import copilot, detect
 from s2o.index import build_index
+from s2o.cli import _under, _read_origin
+import pytest
 
 
 # ── parse:NOISE 清理 ──
@@ -67,8 +69,8 @@ def test_title_slug_strips_forbidden():
 
 
 def test_title_slug_caps_and_no_partial_latin():
-    s = title_slug("flow2code 棄案 tool-call benchmark 很長很長很長很長", cap=12)
-    assert len(s) <= 12
+    s = title_slug("flow2code 棄案 tool-call benchmark 很長很長很長很長", width=12)
+    assert sum(2 if ord(c) > 0x2E80 else 1 for c in s) <= 12
 
 
 def test_session_slug_format():
@@ -128,3 +130,66 @@ def test_build_index_parses_frontmatter(tmp_path):
     assert out["sessions"] == 1 and out["topics"] == 2
     idx = (tmp_path / "sessions" / "INDEX.md").read_text(encoding="utf-8")
     assert "我的標題" in idx and "甲 · 乙" in idx
+
+
+# ── 嚴審修正:健壯性 / 安全 / i18n ──
+def test_extract_json_raises_clustererror_on_garbage():
+    with pytest.raises(ClusterError):
+        _extract_json("完全不是 json 沒有大括號")
+    with pytest.raises(ClusterError):
+        _extract_json("{壞掉的 json 沒收尾")
+
+
+def test_normalize_tolerates_dirty_llm_output():
+    steps = [Step(intent=f"q{i}") for i in range(3)]
+    dirty = {"title": None, "topics": [
+        "我不是 dict",                       # 非 dict topic → 跳過
+        {"name": "a", "steps": [1, "2", None, 99]},  # 字串/None/越界 step → 過濾
+    ]}
+    out = normalize(dirty, steps)            # 不 crash
+    covered = sorted(s for t in out["topics"] for s in t["steps"])
+    assert covered == [1, 2, 3]              # 1 歸 a,2/3 進其他;字串"2"與99被濾
+    assert isinstance(out["title"], str)
+
+
+def test_under_boundary_guard():
+    assert _under("/vault/90-Meta/sessions/x", "/vault/90-Meta/sessions")
+    assert not _under("/vault/other", "/vault/90-Meta/sessions")
+    assert not _under("/etc", "/vault/90-Meta/sessions")
+
+
+def test_demote_mixed_fence_not_confused():
+    # ~~~ 開的 fence 內出現 ``` 不該被當關閉
+    src = "~~~\n```\n# 不是標題(在 ~~~ fence 內)\n~~~"
+    assert demote_headings(src) == src
+
+
+def test_render_i18n_and_frontmatter_escape(tmp_path):
+    steps = [Step(intent="q1", asst=["a1"]), Step(intent="q2", asst=["a2"])]
+    clustering = {"title": "T", "topics": [{"name": "Topic A", "steps": [1, 2]}]}
+    out = str(tmp_path / "s")
+    # 惡意 origin_id(含換行/引號)不可破壞 frontmatter
+    render(steps, clustering, out, "slug", str(tmp_path / "att"), "_att",
+           noimg=True, origin_id='id"x\n---\ninjected: 1', source="claude", lang="en")
+    md = (tmp_path / "s" / "slug.md").read_text(encoding="utf-8")
+    lines = md.split("\n")
+    # 注入被中和:--- 在第 4 行正常關閉、injected 是引號內字串值而非獨立 YAML key
+    assert lines[0] == "---" and lines[3] == "---"
+    assert lines[1].startswith("originSessionId:") and lines[2].startswith("source:")
+    assert _read_origin(str(tmp_path / "s" / "slug.md")) == 'id"x --- injected: 1'
+    assert "## Contents" in md and "**Asked**" in md
+
+    render(steps, clustering, out, "slug2", str(tmp_path / "att"), "_att", noimg=True, lang="zh-TW")
+    md2 = (tmp_path / "s" / "slug2.md").read_text(encoding="utf-8")
+    assert "## 目錄" in md2 and "**我問**" in md2
+
+
+def test_parse_skips_meta_and_sidechain():
+    recs = [
+        {"message": {"role": "user", "content": "真提問"}},
+        {"isSidechain": True, "message": {"role": "user", "content": "sub-agent 雜訊"}},
+        {"isMeta": True, "message": {"role": "user", "content": "meta 雜訊"}},
+        {"message": {"role": "assistant", "content": [{"type": "text", "text": "答"}]}},
+    ]
+    steps = parse_records(recs)
+    assert len(steps) == 1 and steps[0].intent == "真提問"

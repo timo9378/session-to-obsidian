@@ -1,55 +1,73 @@
 # session-to-obsidian
 
-把一場 **Claude Code** 或 **GitHub Copilot Chat** 的對話 session,變成 Obsidian 裡**依語意主題分區、可快速翻找、可給 Claude compact 後回想、可拿來寫文章**的回顧筆記。
+[![CI](https://github.com/timo9378/session-to-obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/timo9378/session-to-obsidian/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/session-to-obsidian.svg)](https://pypi.org/project/session-to-obsidian/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-不是逐字 log dump。它把一場 session 拆成**連貫的主題串**(不是時間段),每條主題底下是「我問 + 助手完整敘述 + 用到的工具/檔案/截圖」,頂部附目錄,並維護一份跨 session 的 `INDEX.md` 當索引。
+Turn a **Claude Code** or **GitHub Copilot Chat** session into an Obsidian note that is organized **by topic**, easy to browse, good for writing from, and useful as a memory layer your AI can recall after a context compaction.
 
-## 為什麼
+繁體中文說明見 **[README.zh-TW.md](README.zh-TW.md)**.
 
-AI coding 一場 session 常常一次解好幾件事(修個 bug、順手改 UI、中間插一段別的)。事後想翻「那個問題當時怎麼解的」,時間軸沒用——你記得的是**主題**,不是幾點做的。這工具用 LLM 把步驟分到主題,讓筆記照你記憶的方式組織。
+Not a verbatim log dump. It splits one session into **coherent topic threads** (not time slices). Under each topic: *what you asked + the assistant's full narrative + the tools/files/screenshots involved*, with a table of contents on top — plus a cross-session `INDEX.md`.
 
-第一受眾是作者本人(一個能一直用下去的個人工具);開源是順手。
+## Why
 
-## 安裝
+One AI coding session often does several unrelated things (fix a bug, tweak some UI, detour into something else). Later you want to find "how did I solve that thing" — and a timeline is useless, because what you remember is the **topic**, not the timestamp. This tool uses an LLM to cluster steps into topics so the note is organized the way you remember it.
+
+The first audience is the author's own future self (a tool you keep using); open source is a bonus.
+
+## Install
 
 ```bash
 pipx install session-to-obsidian
 ```
 
-語意分群預設呼叫你**本機的 `claude` CLI**(Claude Code)——零 API 金鑰、吃你現有訂閱。沒裝 Claude Code 也能用,只是分群退化成時間分段(見下)。
+Topic clustering calls your **local `claude` CLI** (Claude Code) in headless mode — no API key, uses your existing subscription. No Claude Code? It still works, clustering just degrades to time-slicing (see below).
 
-## 用法
+## Usage
 
 ```bash
-# 匯入一場 Claude Code session(jsonl 在 ~/.claude/projects/<專案>/<uuid>.jsonl)
+# A Claude Code session (jsonl lives in ~/.claude/projects/<proj>/<uuid>.jsonl)
 s2o import ~/.claude/projects/myproj/abc123.jsonl --vault ~/Obsidian
 
-# 匯入一場 Copilot Chat session(VS Code 的 chatSessions/<uuid>.jsonl append-log)
+# A Copilot Chat session (VS Code's chatSessions/<uuid>.jsonl append-log)
 s2o import "~/…/workspaceStorage/<hash>/chatSessions/<uuid>.jsonl" --vault ~/Obsidian
 
-# 不靠 LLM,純時間分段(離線/無 Claude Code)
+# Output language (labels + generated titles). Default: en
+s2o import <file> --vault ~/Obsidian --lang zh-TW
+
+# No LLM — pure time-segmentation (offline / no Claude Code)
 s2o import <file> --vault ~/Obsidian --cluster time
 
-# 只重建索引
+# Rebuild the index only
 s2o index --vault ~/Obsidian
 ```
 
-來源(Claude 原生 / Copilot append-log)自動偵測。輸出到 `<vault>/90-Meta/sessions/<日期>-<來源>-<標題>/`,含 `.md`(回顧)+ `.canvas`(主題分組節點圖)。設環境變數 `S2O_VAULT` 可省略 `--vault`。
+Source (Claude native / Copilot append-log) is auto-detected. Output goes to `<vault>/90-Meta/sessions/<date>-<source>-<title>/` with a `.md` (recap) and `.canvas` (topic-grouped node graph). Set `S2O_VAULT` to skip `--vault`; `S2O_LANG` to set a default language. Re-importing the same session replaces the previous note (deduped by an `originSessionId` stored in frontmatter).
 
-## 它怎麼運作
+## How it works
 
 ```
-偵測來源 → adapter 還原成步驟 → 抽「提問+檔名+助手首句」→ 分群(LLM)→ 渲染 .md/.canvas → 更新 INDEX.md
+detect source → adapter restores steps → extract "ask + files + first-line gist"
+   → cluster (LLM) → render .md/.canvas → update INDEX.md
 ```
 
-分群只餵**提問清單 + 該步碰的檔名 + 助手首句**(不餵全文)給 LLM,token 有界。複合提問歸主導主題、主題可跨時間非連續、每步保留原始步號。
+Clustering only feeds the LLM **the ask list + each step's touched filenames + the assistant's first line** (never the full transcript), so token use is bounded. Compound asks go to their dominant topic; topics may be non-contiguous in time; each step keeps its original number.
 
-## 限制
+## Limitations
 
-- **語意分群需要本機 `claude` CLI**(Claude Code)。沒有就用 `--cluster time` 降級成時間分段。
-- 圖片預設不抽(`--images` 開啟);Obsidian 慣例圖走 `_attachments/`(自行 gitignore + Syncthing,避免 git 變肥)。
-- 主題命名/總標題由 LLM 產,品質視模型而定;不滿意可重跑單場。
+- **Topic clustering needs the local `claude` CLI** (Claude Code). Without it, use `--cluster time`.
+- Images are not extracted by default (`--images` to enable). By Obsidian convention images live under `_attachments/` (gitignore them; sync via Syncthing to avoid bloating git).
+- Topic names / titles are LLM-generated; quality depends on the model. Re-run a single session to regenerate.
+
+## Development
+
+```bash
+pip install pytest -e .
+pytest
+```
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

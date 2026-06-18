@@ -65,6 +65,8 @@ def parse_records(records, *, with_images: bool = False) -> list[Step]:
     for rec in records:
         if not isinstance(rec, dict):
             continue
+        if rec.get("isMeta") or rec.get("isSidechain"):   # 跳過 hook/sub-agent 側鏈/meta 記錄
+            continue
         msg = rec.get("message") or {}
         role = msg.get("role") or rec.get("type")
         bs = blocks(msg.get("content"))
@@ -105,6 +107,14 @@ def parse_records(records, *, with_images: bool = False) -> list[Step]:
                     if fp:
                         cur.files.add(fp)
     return steps
+
+
+def session_id(records) -> str:
+    """Claude 原生 record 帶 sessionId(每筆都同一個);用來做穩定去重 key。"""
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("sessionId"):
+            return str(rec["sessionId"])
+    return ""
 
 
 def read_jsonl(path) -> list[dict]:

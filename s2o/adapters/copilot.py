@@ -148,5 +148,9 @@ def load(src_path):
             records.append({"timestamp": ts, "message": {"role": "assistant", "content": bs}})
 
     title = (state.get("customTitle") or "").strip() or re.sub(r"\s+", " ", first_user)[:50]
-    meta = {"date": _iso(state.get("creationDate")), "title": title}
+    # 去重 id:優先用 log 內 sessionId,否則用 creationDate(同一場固定)
+    sid = str(state.get("sessionId") or state.get("sessionResource") or "").strip()
+    if not sid:
+        sid = f"copilot-{state.get('creationDate') or ''}"
+    meta = {"date": _iso(state.get("creationDate")), "title": title, "session_id": sid}
     return records, meta

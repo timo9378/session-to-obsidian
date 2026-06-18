@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 
+from . import i18n
 from .parse import Step, dump_intents, oneline
 
 GAP = 1200  # time fallback:步間隔 > 20 分鐘 = 換段
@@ -20,22 +21,6 @@ FORBID_LINK = re.compile(r"[#\[\]|]")  # Obsidian 連結/標題不安全字元(`
 
 class ClusterError(RuntimeError):
     pass
-
-
-RULES = """你是對話主題分群器。輸入是一場 AI coding session 的步驟清單,每步有 intent(提問)、files(碰的檔名)、gist(助手首句)。把步驟分到幾條連貫主題,並給整場一個總標題。
-
-規則(嚴格遵守):
-1. 每步恰好歸一主題(不重不漏,所有 1..n 都要被分到)。
-2. 一主題 = 一條連貫的問題/任務串。別碎到每步一主題;tiny(≤5 步同一事)→ 1 主題;大場(>50 步)可較多主題。
-3. 主題【可非連續】:時間隔開但同一條線的步驟歸同一主題(中間插別的、後面回來收尾 commit → 收尾步歸回那條線)。
-4. 複合提問【不拆】,整步歸主導/最主要那條線(看重心 + files + gist + 後續步接哪條線)。
-5. files/gist 是消歧訊號:提問字面看不出時(如「這是連結」),用 files/gist 判斷屬哪條線。
-6. 主題名簡短中文(≤16 字),總標題涵蓋全場(≤24 字);名稱與標題不可含 # [ ] | 與斜線。
-7. 不要空主題。
-
-只輸出一段 JSON(無 code fence、無其他文字):
-{"title":"總標題","topics":[{"name":"主題名","steps":[1,2,3]}, ...]}
-steps 用 1-based 原始步號。"""
 
 
 def _sanitize(s: str) -> str:
@@ -51,31 +36,40 @@ def _extract_json(text: str) -> dict:
         pass
     a, b = t.find("{"), t.rfind("}")
     if a >= 0 and b > a:
-        return json.loads(t[a:b + 1])
+        try:
+            return json.loads(t[a:b + 1])
+        except Exception:
+            pass
     raise ClusterError("分群輸出不是合法 JSON")
 
 
-def normalize(clustering: dict, steps: list[Step]) -> dict:
-    """保證覆蓋率:漏的步驟丟『其他 / 未分類』;主題按最早步號排;清理名稱與標題。"""
+def normalize(clustering: dict, steps: list[Step], lang: str = i18n.DEFAULT_LANG) -> dict:
+    """保證覆蓋率:漏的步驟丟『其他』;主題按最早步號排;清理名稱與標題。容忍髒 LLM 輸出。"""
+    if not isinstance(clustering, dict):
+        clustering = {}
     n = len(steps)
     raw, assigned = [], set()
-    for t in clustering.get("topics", []):
-        idxs = sorted({s for s in t.get("steps", []) if 1 <= s <= n and s not in assigned})
+    for t in clustering.get("topics", []) or []:
+        if not isinstance(t, dict):
+            continue
+        idxs = sorted({s for s in (t.get("steps") or [])
+                       if isinstance(s, int) and 1 <= s <= n and s not in assigned})
         for s in idxs:
             assigned.add(s)
         if idxs:
-            raw.append({"name": _sanitize(t.get("name", "") or "未命名"), "steps": idxs})
+            raw.append({"name": _sanitize(str(t.get("name") or "")) or "untitled", "steps": idxs})
     leftover = [s for s in range(1, n + 1) if s not in assigned]
     if leftover:
-        raw.append({"name": "其他 / 未分類", "steps": leftover})
+        raw.append({"name": i18n.L(lang)["other"], "steps": leftover})
     raw.sort(key=lambda g: g["steps"][0])
-    title = _sanitize(clustering.get("title", "")) or (oneline(steps[0].intent)[:24] if steps else "session")
+    title = _sanitize(str(clustering.get("title") or "")) or \
+        (oneline(steps[0].intent)[:24] if steps else "session")
     return {"title": title, "topics": raw}
 
 
-def _cluster_claude_cli(steps: list[Step], model: str | None, timeout: int) -> dict:
+def _cluster_claude_cli(steps: list[Step], model: str | None, timeout: int, lang: str) -> dict:
     payload = {"n": len(steps), "steps": dump_intents(steps)}
-    prompt = RULES + "\n\n## 輸入\n" + json.dumps(payload, ensure_ascii=False)
+    prompt = i18n.cluster_rules(lang) + "\n\n## 輸入\n" + json.dumps(payload, ensure_ascii=False)
     # prompt 走 stdin,不走 argv:大場 dump 會超過 ARG_MAX(Argument list too long)。
     cmd = ["claude", "-p", "--output-format", "text"]
     if model:
@@ -87,12 +81,13 @@ def _cluster_claude_cli(steps: list[Step], model: str | None, timeout: int) -> d
     except subprocess.TimeoutExpired:
         raise ClusterError(f"claude -p 逾時(>{timeout}s)")
     if r.returncode != 0:
-        raise ClusterError(f"claude -p 失敗(exit {r.returncode}): {r.stderr[:200]}")
+        raise ClusterError(f"claude -p 失敗(exit {r.returncode}): {(r.stderr or '')[:200]}")
     return _extract_json(r.stdout)
 
 
-def _cluster_time(steps: list[Step]) -> dict:
+def _cluster_time(steps: list[Step], lang: str) -> dict:
     from datetime import datetime
+    phase_fmt = i18n.L(lang)["phase"]
     phases, ph, last = [], [], None
     for i, s in enumerate(steps):
         if ph and s.ts and last and (s.ts - last) > GAP:
@@ -108,16 +103,16 @@ def _cluster_time(steps: list[Step]) -> dict:
         ts0 = steps[idxs[0] - 1].ts
         if ts0:
             when = datetime.fromtimestamp(ts0).strftime("%m/%d %H:%M")
-        topics.append({"name": f"第 {pi + 1} 段 {when}".strip(), "steps": idxs})
+        topics.append({"name": f"{phase_fmt.format(n=pi + 1)} {when}".strip(), "steps": idxs})
     return {"title": oneline(steps[0].intent)[:24] if steps else "session", "topics": topics}
 
 
 def cluster(steps: list[Step], backend: str = "claude_cli", model: str | None = None,
-            timeout: int = 180) -> dict:
+            timeout: int = 180, lang: str = i18n.DEFAULT_LANG) -> dict:
     if not steps:
-        return {"title": "(空)", "topics": []}
+        return {"title": "(empty)", "topics": []}
     if backend == "time":
-        return normalize(_cluster_time(steps), steps)
+        return normalize(_cluster_time(steps, lang), steps, lang)
     if backend == "claude_cli":
-        return normalize(_cluster_claude_cli(steps, model, timeout), steps)
+        return normalize(_cluster_claude_cli(steps, model, timeout, lang), steps, lang)
     raise ClusterError(f"未知分群後端:{backend}(支援 claude_cli / time)")

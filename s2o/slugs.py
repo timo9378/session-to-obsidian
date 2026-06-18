@@ -6,11 +6,18 @@ import re
 _FORBID = re.compile(r'[\\/:*?"<>|\n\r\t#\[\]]')
 
 
-def title_slug(title: str, cap: int = 26) -> str:
+def title_slug(title: str, width: int = 48) -> str:
+    """按【顯示寬度】截長(CJK=2、半形=1),en 標題較長也不被切太短。"""
     s = _FORBID.sub("", title or "")
     s = re.sub(r"\s+", " ", s).strip().strip(".")
-    if len(s) > cap:
-        s = s[:cap]
+    w, cut, truncated = 0, len(s), False
+    for i, c in enumerate(s):
+        w += 2 if ord(c) > 0x2E80 else 1
+        if w > width:
+            cut, truncated = i, True
+            break
+    s = s[:cut]
+    if truncated:
         s = re.sub(r"[A-Za-z0-9]+$", "", s).strip()  # 別切在半個英文字中間
     return s.strip(" .、·-+,")
 

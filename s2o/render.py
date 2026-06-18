@@ -9,37 +9,47 @@ import json
 import os
 import re
 
+from . import i18n
 from .parse import Step, oneline
 
 PCOLORS = ["1", "2", "3", "4", "5", "6"]  # 紅橙黃綠青紫,循環
 GX, STEPW, IMGW = 40, 460, 300
+_PHASE_RE = re.compile(r"^(第 ?\d+ ?段|Phase \d+)")
+
+
+def _dwidth(s: str) -> int:
+    """顯示寬度:CJK/全形算 2,半形算 1(canvas 高度估算才不會低估溢出)。"""
+    return sum(2 if ord(c) > 0x2E80 else 1 for c in s)
 
 
 def demote_headings(t: str) -> str:
-    out, infence = [], False
+    out, fence = [], None  # fence = 開啟的圍欄字串(``` 或 ~~~),None=不在 fence 內
     for ln in t.split("\n"):
         st = ln.lstrip()
-        if st.startswith("```") or st.startswith("~~~"):
-            infence = not infence
+        mark = "```" if st.startswith("```") else ("~~~" if st.startswith("~~~") else None)
+        if mark:
+            if fence is None:
+                fence = mark
+            elif fence == mark:        # 只被同型圍欄關閉(混用 ```/~~~ 不誤判)
+                fence = None
             out.append(ln)
             continue
-        if not infence:
+        if fence is None:
             m = re.match(r"\s*#{1,6}\s+(.*\S)\s*$", ln)
             if m:
                 out.append(f"**{m.group(1)}**")
                 continue
         out.append(ln)
-    if infence:
-        out.append("```")
+    if fence is not None:
+        out.append(fence)
     return "\n".join(out)
 
 
-def _heading(gi: int, name: str) -> str:
-    return name if re.match(r"^第 ?\d+ ?段", name) else f"主題 {gi + 1} · {name}"
+def _heading(gi: int, name: str, lab: dict) -> str:
+    return name if _PHASE_RE.match(name) else f"{lab['topic']} {gi + 1} · {name}"
 
 
 def _write_images(steps, groups_idx, attach_abs, noimg):
-    """回傳 {step_index: [filename,...]};順手把圖寫到 attach_abs。"""
     if noimg:
         return {}, 0
     os.makedirs(attach_abs, exist_ok=True)
@@ -59,29 +69,30 @@ def _write_images(steps, groups_idx, attach_abs, noimg):
 
 def render(steps: list[Step], clustering: dict, out_dir: str, slug: str,
            attach_abs: str, attach_rel: str, noimg: bool = True,
-           origin_id: str = "", source: str = "") -> dict:
+           origin_id: str = "", source: str = "", lang: str = i18n.DEFAULT_LANG) -> dict:
     os.makedirs(out_dir, exist_ok=True)
+    lab = i18n.L(lang)
     title = clustering.get("title") or slug
     groups = [{"name": t["name"], "idxs": [s - 1 for s in t["steps"]]}
               for t in clustering.get("topics", [])]
     imgmap, img_n = _write_images(steps, [g["idxs"] for g in groups], attach_abs, noimg)
+    headings = [_heading(gi, g["name"], lab) for gi, g in enumerate(groups)]
 
     # ── Canvas:每組一彩色 group 框,框內步驟直排,截圖掛右側 ──
     nodes, edges, Y, prev = [], [], 0, None
     for gi, g in enumerate(groups):
-        head = _heading(gi, g["name"])
         y = Y + 50
         maxx = GX + STEPW
         for i in g["idxs"]:
             s = steps[i]
             intent = oneline(s.intent)
             intent = (intent[:64] + "…") if len(intent) > 64 else intent
-            exc = s.excerpt or "(僅工具操作)"
+            exc = s.excerpt or lab["tool_only"]
             toolset = sorted(set(s.tools))
             foot = (f"\n\n🔧 {', '.join(toolset[:5])}" if toolset else "") + \
                    (f" · 📄{len(s.files)}" if s.files else "")
             txt = f"**#{i + 1}. {intent}**\n\n{exc}{'…' if len(s.excerpt) >= 300 else ''}{foot}"
-            h = max(120, (len(txt) // 32 + txt.count(chr(10)) + 2) * 26)
+            h = max(120, (_dwidth(txt) // 40 + txt.count(chr(10)) + 2) * 26)
             nid = f"step{i}"
             nodes.append({"id": nid, "type": "text", "x": GX, "y": y, "width": STEPW,
                           "height": h, "color": PCOLORS[gi % 6], "text": txt})
@@ -98,31 +109,34 @@ def render(steps: list[Step], clustering: dict, out_dir: str, slug: str,
             y += max(h, 220 if imgmap.get(i) else 0) + 40
             prev = nid
         nodes.insert(0, {"id": f"grp{gi}", "type": "group", "x": 0, "y": Y, "width": maxx + 40,
-                         "height": (y - Y) + 30, "label": f"{head} · {len(g['idxs'])} 步",
+                         "height": (y - Y) + 30,
+                         "label": f"{headings[gi]} · {len(g['idxs'])} {lab['steps']}",
                          "color": PCOLORS[gi % 6]})
         Y = y + 90
     with open(os.path.join(out_dir, f"{slug}.canvas"), "w", encoding="utf-8") as f:
         json.dump({"nodes": nodes, "edges": edges}, f, ensure_ascii=False)
 
-    # ── 回顧筆記:frontmatter(供去重/溯源)+ 頂部 TOC + 依主題分區 + 完整敘述 ──
+    # ── 回顧筆記:frontmatter(供去重/溯源,值一律 escape 防注入)+ TOC + 主題分區 ──
     L = []
     if origin_id:
-        L += ["---", f"originSessionId: {origin_id}", f"source: {source or 'unknown'}", "---", ""]
+        oid = json.dumps(origin_id.replace("\n", " ").replace("\r", " "), ensure_ascii=False)
+        src = json.dumps(source or "unknown", ensure_ascii=False)
+        L += ["---", f"originSessionId: {oid}", f"source: {src}", "---", ""]
     L += [f"# {title}\n",
-          f"> {len(steps)} 步 · {len(groups)} 主題 · {img_n} 圖 · 節點圖見 [[{slug}.canvas]]\n",
-          "## 目錄\n"]
-    headings = [_heading(gi, g["name"]) for gi, g in enumerate(groups)]
+          f"> {len(steps)} {lab['steps']} · {len(groups)} {lab['topics']} · {img_n} {lab['images']}"
+          f" · {lab['canvas']} [[{slug}.canvas]]\n",
+          f"## {lab['contents']}\n"]
     for gi, g in enumerate(groups):
         nums = " ".join(f"#{i + 1}" for i in g["idxs"])
-        L.append(f"- [[#{headings[gi]}|{g['name']}]] · {len(g['idxs'])} 步 `{nums}`")
+        L.append(f"- [[#{headings[gi]}|{g['name']}]] · {len(g['idxs'])} {lab['steps']} `{nums}`")
     L.append("\n---\n")
     for gi, g in enumerate(groups):
         L.append(f"\n# {headings[gi]}\n")
         for i in g["idxs"]:
             s = steps[i]
             L.append(f"## #{i + 1} · {oneline(s.intent)[:100]}")
-            L.append(f"> **我問**:{oneline(s.intent)}\n")
-            L.append(demote_headings(s.prose) if s.prose else "_(僅工具操作)_")
+            L.append(f"> **{lab['asked']}**:{oneline(s.intent)}\n")
+            L.append(demote_headings(s.prose) if s.prose else f"_{lab['tool_only']}_")
             meta = []
             if s.tools:
                 meta.append(f"🔧 {', '.join(sorted(set(s.tools)))}")
