@@ -5,7 +5,9 @@ from . import claude, copilot
 
 
 def detect(src_path) -> str:
-    """嗅第一行:Copilot append-log 首行有 kind 鍵;Claude 原生是 message/type 訊息。"""
+    """嗅第一行:Copilot append-log 首行有 kind 鍵;Claude 原生是 message/type 訊息。
+    整檔 pretty-printed JSON(VS Code version-3 chat 匯出)首行為 `{` 無法逐行解析,
+    改讀整檔判斷是否為 Copilot session(有 requests[])。"""
     with open(src_path, encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -13,6 +15,13 @@ def detect(src_path) -> str:
             try:
                 o = json.loads(line)
             except Exception:
+                try:
+                    with open(src_path, encoding="utf-8") as g:
+                        obj = json.load(g)
+                    if isinstance(obj, dict) and "requests" in obj:
+                        return "copilot"
+                except Exception:
+                    pass
                 return "claude"
             return "copilot" if "kind" in o else "claude"
     return "claude"

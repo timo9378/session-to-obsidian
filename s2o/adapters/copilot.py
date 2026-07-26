@@ -39,6 +39,20 @@ def _filepath(part):
     return "/" + m.group(1) if m else None
 
 
+def _edit_text(part):
+    """textEditGroup.edits → 重組出實際寫入的程式碼/文字。
+    edits = 串流的編輯批次(list of list of {text, range});依序串接 text 即為內容。
+    Copilot 把 code block 的內文放在 textEditGroup(不在 value 散文裡),value 只留 ``` 外框,
+    不抓的話 render 出來就是一個個空的程式碼框。"""
+    out = []
+    for grp in (part.get("edits") or []):
+        items = grp if isinstance(grp, list) else [grp]
+        for e in items:
+            if isinstance(e, dict) and isinstance(e.get("text"), str):
+                out.append(e["text"])
+    return "".join(out)
+
+
 def _replay(src_path) -> dict:
     """串流重放 append-log → 最終 state(dict)。"""
     state = None
@@ -104,9 +118,35 @@ def _replay(src_path) -> dict:
     return state
 
 
+def _load_state(src_path) -> dict:
+    """取得最終 state:append-log(kind=0 串流重放)或 version-3 整檔 JSON 匯出。
+    兩者最終 state 同形(requests[] + message.text + response[]),下游共用。"""
+    first = ""
+    with open(src_path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                first = line
+                break
+    try:
+        o = json.loads(first)
+        if isinstance(o, dict) and "kind" in o:
+            return _replay(src_path)
+    except Exception:
+        pass
+    # version-3 整檔 JSON(pretty-printed)
+    try:
+        with open(src_path, encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict) and "requests" in obj:
+            return obj
+    except Exception:
+        pass
+    return _replay(src_path)  # 退回 replay(讓它丟原本的標頭錯)
+
+
 def load(src_path):
     """→ (records, meta)。records = Claude 格式訊息 list;meta = {date, title}。"""
-    state = _replay(src_path)
+    state = _load_state(src_path)
     reqs = state.get("requests") or []
     records = []
     first_user = ""
@@ -127,6 +167,10 @@ def load(src_path):
                 continue
             if isinstance(part.get("value"), str):
                 prose.append(part["value"])
+            elif part.get("kind") == "textEditGroup":
+                code = _edit_text(part)
+                if code.strip("\n"):
+                    prose.append(code)
             elif part.get("kind") == "inlineReference":
                 ref = part.get("inlineReference") or {}
                 nm = ref.get("name") or (os.path.basename(ref["path"]) if ref.get("path") else "")
