@@ -10,7 +10,10 @@
 from __future__ import annotations
 import json
 import re
+import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 
 from . import i18n
 from .parse import Step, dump_intents, oneline
@@ -74,15 +77,32 @@ def _cluster_claude_cli(steps: list[Step], model: str | None, timeout: int, lang
     cmd = ["claude", "-p", "--output-format", "text"]
     if model:
         cmd += ["--model", model]
+    # headless `claude -p` 會把這次呼叫存成一場 session 到 ~/.claude/projects/<cwd 編碼>/,
+    # 污染使用者的 session picker。改在拋棄式 temp cwd 執行,結束後連那個 project 夾一起清掉。
+    tmp_cwd = tempfile.mkdtemp(prefix="s2ocluster")
     try:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                           timeout=timeout, cwd=tmp_cwd)
     except FileNotFoundError:
         raise ClusterError("找不到 `claude` CLI(語意分群需要本機安裝 Claude Code;或改用 --cluster time)")
     except subprocess.TimeoutExpired:
         raise ClusterError(f"claude -p 逾時(>{timeout}s)")
+    finally:
+        _cleanup_cluster_sessions(tmp_cwd)
     if r.returncode != 0:
         raise ClusterError(f"claude -p 失敗(exit {r.returncode}): {(r.stderr or '')[:200]}")
     return _extract_json(r.stdout)
+
+
+def _cleanup_cluster_sessions(tmp_cwd: str) -> None:
+    """清掉 headless 分群留下的痕跡:Claude Code 依 cwd 編碼落在 ~/.claude/projects 的 session 夾
+    + temp cwd 本身。用唯一前綴 glob 比對,免去重現 Claude 的路徑編碼規則(且順手清掉殘留)。"""
+    try:
+        for p in (Path.home() / ".claude" / "projects").glob("*s2ocluster*"):
+            shutil.rmtree(p, ignore_errors=True)
+    except Exception:
+        pass
+    shutil.rmtree(tmp_cwd, ignore_errors=True)
 
 
 def _cluster_time(steps: list[Step], lang: str) -> dict:
