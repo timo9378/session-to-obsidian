@@ -200,3 +200,31 @@ def test_dump_intents_caps_long_intent():
     d = dump_intents([Step(intent="x" * 5000, asst=["a"])])[0]
     assert len(d["intent"]) == 300
 
+
+def _tiny_session(path, sid="sid-reimport"):
+    recs = [
+        {"type": "user", "sessionId": sid, "timestamp": "2026-01-01T00:00:00Z",
+         "message": {"role": "user", "content": "第一個問題"}},
+        {"type": "assistant", "sessionId": sid, "timestamp": "2026-01-01T00:00:05Z",
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "回答。"}]}},
+    ]
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n", encoding="utf-8")
+
+
+def test_reimport_keeps_folder_name(tmp_path):
+    from s2o.cli import main
+    src, vault = tmp_path / "s.jsonl", tmp_path / "vault"
+    vault.mkdir()
+    _tiny_session(src)
+    base = ["import", str(src), "--vault", str(vault), "--source", "claude", "--cluster", "time", "--no-index"]
+    sessions = vault / "90-Meta" / "sessions"
+
+    assert main(base + ["--slug", "my-stable-name"]) == 0
+    # 重匯不給 --slug:沿用既有資料夾名,不因重新分群的新標題改名
+    assert main(base) == 0
+    assert [p.name for p in sessions.iterdir()] == ["my-stable-name"]
+
+    # --rename 才依新標題改名,且舊資料夾被取代(不留重複)
+    assert main(base + ["--rename"]) == 0
+    names = [p.name for p in sessions.iterdir()]
+    assert len(names) == 1 and names[0] != "my-stable-name"

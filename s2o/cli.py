@@ -109,9 +109,16 @@ def cmd_import(a) -> int:
     title = clustering["title"]
     source = meta.get("source", "session")
     origin_id = (meta.get("session_id") or os.path.splitext(os.path.basename(a.file))[0]).strip()
-    slug = a.slug or session_slug(meta.get("date", ""), source, title)
     sessions_dir = os.path.join(a.vault, a.subdir)
     removed = _dedupe(sessions_dir, a.vault, a.attachments, origin_id)
+    # 重匯預設沿用既有資料夾名:重新分群會產生新標題,跟著改名會讓 wikilink 與外部引用全部失效。
+    # 要用新標題命名就加 --rename,或直接給 --slug。
+    if a.slug:
+        slug = a.slug
+    elif removed and not a.rename:
+        slug = removed[0]
+    else:
+        slug = session_slug(meta.get("date", ""), source, title)
 
     out_dir, attach_abs, attach_rel = _paths(a.vault, a.subdir, a.attachments, slug)
     if _folder_origin(out_dir) not in (None, origin_id):     # 不同場撞同標題 → 加後綴
@@ -163,6 +170,8 @@ def main(argv=None) -> int:
     pi.add_argument("--attachments", default="_attachments/sessions", help="where images go (vault-relative)")
     pi.add_argument("--images", action="store_true", help="extract screenshots (default: text-only)")
     pi.add_argument("--slug", default=None, help="override auto name (<date>-<source>-<title>)")
+    pi.add_argument("--rename", action="store_true",
+                    help="on re-import, rename the folder from the new title (default: keep the existing name)")
     pi.add_argument("--no-index", action="store_true", help="don't rebuild INDEX.md after import")
     pi.set_defaults(func=cmd_import)
 
