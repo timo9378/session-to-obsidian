@@ -6,6 +6,30 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-03
+
+### Changed
+- Re-importing a session now keeps its existing folder name instead of renaming it
+  from the newly clustered title, which broke wikilinks and external references.
+  Pass `--rename` to opt back into renaming, or `--slug` to set a name explicitly.
+
+### Fixed
+- Each step's intent is capped at 300 characters in the clustering input. A step
+  containing a huge pasted prompt (e.g. another session's step list) could dominate
+  the input, and the model would copy its labels as topic names.
+
+## [0.1.1] - 2026-07-26
+
+### Fixed
+- Copilot: detect version-3 whole-file JSON sessions and restore code blocks from
+  `textEditGroup` edits (previously rendered as empty blocks).
+- Clustering runs `claude -p` in a temporary cwd and cleans up afterwards, so headless
+  clustering sessions no longer appear in the Claude Code session picker.
+
+### Added
+- Helper converters for Cline / Roo Code and Gemini CLI sessions
+  (`cline_to_claude.py`, `gemini_cli_to_claude.py`).
+
 ## [0.1.0] - 2026-06-19
 
 Initial release.
