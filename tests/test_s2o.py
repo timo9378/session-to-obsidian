@@ -193,3 +193,10 @@ def test_parse_skips_meta_and_sidechain():
     ]
     steps = parse_records(recs)
     assert len(steps) == 1 and steps[0].intent == "真提問"
+
+
+def test_dump_intents_caps_long_intent():
+    # 整段貼上的長 prompt 不截會壓過其他訊號,分群模型會照抄裡面的標籤
+    d = dump_intents([Step(intent="x" * 5000, asst=["a"])])[0]
+    assert len(d["intent"]) == 300
+

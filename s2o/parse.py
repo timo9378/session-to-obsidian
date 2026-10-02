@@ -138,7 +138,9 @@ def dump_intents(steps: list[Step]) -> list[dict]:
     for i, s in enumerate(steps):
         files = sorted({os.path.basename(f) for f in s.files})[:6]
         gist = oneline(s.prose)[:160]
-        d = {"i": i + 1, "intent": oneline(s.intent)}
+        # intent 也要截:整段貼上的長 prompt(例如另一場的步驟清單)不截會壓過其他訊號,
+        # 分群模型會直接照抄裡面的標籤當主題名。300 字對正常追問綽綽有餘。
+        d = {"i": i + 1, "intent": oneline(s.intent)[:300]}
         if files:
             d["files"] = files
         if gist:
