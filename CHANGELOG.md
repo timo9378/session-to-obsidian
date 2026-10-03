@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-03
+
+### Fixed
+- Extract images the agent itself viewed, not only images pasted by the user. When
+  the agent saves a screenshot (e.g. Playwright) and opens it with Read, or uses a
+  browser tool, the image is stored inside a `tool_result` block, which was skipped.
+  Duplicate screenshots (the same image read several times) are kept once.
+- Agent-viewed images are written as `agent_NNN.*`, numbered separately from
+  user-pasted `shot_NNN.*`, so re-importing keeps existing `shot_` numbers stable.
+
 ## [0.2.0] - 2026-10-03
 
 ### Changed
