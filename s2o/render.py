@@ -53,18 +53,22 @@ def _write_images(steps, groups_idx, attach_abs, noimg):
     if noimg:
         return {}, 0
     os.makedirs(attach_abs, exist_ok=True)
-    out, k = {}, 0
+    # 使用者貼的圖 shot_NNN、agent 看過的圖 agent_NNN,分開編號:
+    # 舊版只有 shot_,分開編號才能讓重匯後既有的 shot_ 編號不位移。
+    out, n = {}, {"user": 0, "tool": 0}
     for i in sorted({i for idxs in groups_idx for i in idxs}):
         for im in steps[i].imgs:
-            fn = f"shot_{k:03d}.{im['ext']}"
+            origin = im.get("origin", "user")
+            prefix = "agent" if origin == "tool" else "shot"
+            fn = f"{prefix}_{n[origin]:03d}.{im['ext']}"
             try:
                 with open(os.path.join(attach_abs, fn), "wb") as f:
                     f.write(im["data"])
                 out.setdefault(i, []).append(fn)
-                k += 1
+                n[origin] += 1
             except Exception:
                 pass
-    return out, k
+    return out, n["user"] + n["tool"]
 
 
 def render(steps: list[Step], clustering: dict, out_dir: str, slug: str,

@@ -228,3 +228,39 @@ def test_reimport_keeps_folder_name(tmp_path):
     assert main(base + ["--rename"]) == 0
     names = [p.name for p in sessions.iterdir()]
     assert len(names) == 1 and names[0] != "my-stable-name"
+
+
+def _img_block(payload: bytes):
+    import base64
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                        "data": base64.b64encode(payload).decode()}}
+
+
+def test_parse_extracts_tool_result_images_and_dedupes():
+    # agent 用 Read 打開截圖檔時,圖包在 tool_result 裡;同一張被看兩次只留一份
+    recs = [
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "看一下首頁"}, _img_block(b"pasted")]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x/shot.png"}}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [_img_block(b"screen")]}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": [_img_block(b"screen")]}]}},
+    ]
+    steps = parse_records(recs, with_images=True)
+    assert len(steps) == 1                      # tool_result 不另開步驟
+    assert [im["origin"] for im in steps[0].imgs] == ["user", "tool"]
+    assert parse_records(recs, with_images=False)[0].imgs == []
+
+
+def test_render_numbers_user_and_agent_images_separately(tmp_path):
+    s = Step(intent="q", asst=["a"])
+    s.imgs = [{"ext": "png", "data": b"1", "origin": "tool"},
+              {"ext": "png", "data": b"2", "origin": "user"},
+              {"ext": "png", "data": b"3", "origin": "tool"}]
+    clustering = {"title": "T", "topics": [{"name": "A", "steps": [1]}]}
+    att = tmp_path / "att"
+    render([s], clustering, str(tmp_path / "s"), "slug", str(att), "_att", noimg=False, lang="zh-TW")
+    # 使用者的圖仍從 shot_000 起算,不因 agent 截圖穿插而位移
+    assert sorted(p.name for p in att.iterdir()) == ["agent_000.png", "agent_001.png", "shot_000.png"]

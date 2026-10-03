@@ -46,7 +46,7 @@ class Step:
     asst: list = field(default_factory=list)      # 助手文字片段
     tools: list = field(default_factory=list)
     files: set = field(default_factory=set)
-    imgs: list = field(default_factory=list)       # [{"ext":, "data": bytes}]
+    imgs: list = field(default_factory=list)       # [{"ext":, "data": bytes, "origin": "user"|"tool"}]
     ts: float | None = None
 
     @property
@@ -62,6 +62,7 @@ def parse_records(records, *, with_images: bool = False) -> list[Step]:
     """records = 可疊代的 Claude 格式訊息(dict,含 message.role/content、timestamp)。"""
     steps: list[Step] = []
     cur: Step | None = None
+    seen_tool_imgs: set = set()   # 同一張截圖常被 Read 好幾次,只留一份
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -77,21 +78,34 @@ def parse_records(records, *, with_images: bool = False) -> list[Step]:
                 if isinstance(b, dict) and b.get("type") == "text"
             ).strip()
             imgs_here = [b for b in bs if isinstance(b, dict) and b.get("type") == "image"]
+            # agent 看過的圖(Read 打開的截圖檔、瀏覽器截圖)包在 tool_result 裡,不在第一層
+            tool_imgs = [x for b in bs
+                         if isinstance(b, dict) and b.get("type") == "tool_result"
+                         and isinstance(b.get("content"), list)
+                         for x in b["content"] if isinstance(x, dict) and x.get("type") == "image"]
             if text and len(text) > 1:
                 cur = Step(intent=text, ts=epoch(rec.get("timestamp", "")))
                 steps.append(cur)
             if cur is not None and with_images:
                 import base64
-                for im in imgs_here:
-                    src = im.get("source") or {}
-                    data = src.get("data")
-                    if not data:
-                        continue
-                    ext = src.get("media_type", "image/png").split("/")[-1].replace("jpeg", "jpg")
-                    try:
-                        cur.imgs.append({"ext": ext, "data": base64.b64decode(data)})
-                    except Exception:
-                        pass
+                import hashlib
+                for origin, group in (("user", imgs_here), ("tool", tool_imgs)):
+                    for im in group:
+                        src = im.get("source") or {}
+                        data = src.get("data")
+                        if not data:
+                            continue
+                        ext = src.get("media_type", "image/png").split("/")[-1].replace("jpeg", "jpg")
+                        try:
+                            raw = base64.b64decode(data)
+                        except Exception:
+                            continue
+                        if origin == "tool":
+                            h = hashlib.sha1(raw).hexdigest()
+                            if h in seen_tool_imgs:
+                                continue
+                            seen_tool_imgs.add(h)
+                        cur.imgs.append({"ext": ext, "data": raw, "origin": origin})
         elif role == "assistant" and cur is not None:
             for b in bs:
                 if not isinstance(b, dict):
