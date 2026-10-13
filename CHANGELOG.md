@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
+### Changed
+- Re-importing a session that has continued since the last import keeps its existing
+  topic grouping and only clusters the new steps, assigning each to an existing topic
+  (name kept verbatim) or a new one. Topic names no longer change on every sync, and a
+  re-import with no new steps makes no model call. Falls back to full clustering when the
+  previous note no longer matches the session's steps or was time-segmented; if clustering
+  the new steps fails, they go under "Other" instead of degrading the whole note.
+  Pass `--recluster` to re-cluster the whole session.
+
 ## [0.2.1] - 2026-10-03
 
 ### Fixed

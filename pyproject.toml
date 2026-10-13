@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "session-to-obsidian"
-version = "0.2.1"
+version = "0.3.0"
 description = "把 Claude Code / GitHub Copilot 對話 session 變成 Obsidian 裡依語意主題分區、可翻找、可給 Claude compact 後回想的回顧筆記"
 readme = "README.md"
 requires-python = ">=3.10"
