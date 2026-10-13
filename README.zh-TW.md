@@ -41,7 +41,7 @@ s2o import <file> --vault ~/Obsidian --cluster time
 s2o index --vault ~/Obsidian
 ```
 
-來源自動偵測。輸出到 `<vault>/90-Meta/sessions/<日期>-<來源>-<標題>/`(`.md` + `.canvas`)。`S2O_VAULT` 可省 `--vault`,`S2O_LANG` 設預設語言。重匯同一場會自動取代舊版(靠 frontmatter 的 `originSessionId` 去重)。
+來源自動偵測。輸出到 `<vault>/90-Meta/sessions/<日期>-<來源>-<標題>/`(`.md` + `.canvas`)。`S2O_VAULT` 可省 `--vault`,`S2O_LANG` 設預設語言。重匯同一場會自動取代舊版(靠 frontmatter 的 `originSessionId` 去重)。場次有續寫時,會沿用原本的資料夾名與主題分組、只替新增的步驟分群,主題名不會每次同步都變;沒有新步驟就完全不呼叫模型。要整場重新分群加 `--recluster`,要依新標題改資料夾名加 `--rename`。
 
 ## 它怎麼運作
 

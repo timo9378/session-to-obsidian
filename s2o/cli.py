@@ -77,6 +77,18 @@ def _dedupe(sessions_dir, vault, attachments, origin_id) -> list[str]:
     return removed
 
 
+def _previous_clustering(sessions_dir, origin_id, steps):
+    """同源舊筆記的分組(對不上目前步驟就回 None)。"""
+    for md in glob.glob(os.path.join(sessions_dir, "*", "*.md")):
+        if _read_origin(md) == origin_id:
+            try:
+                with open(md, encoding="utf-8") as f:
+                    return clustermod.load_previous(f.read(), steps)
+            except Exception:
+                return None
+    return None
+
+
 def cmd_import(a) -> int:
     if not os.path.isfile(a.file):
         print(f"找不到 session 檔:{a.file}", file=sys.stderr)
@@ -94,22 +106,36 @@ def cmd_import(a) -> int:
         print("沒有可匯入的步驟(空 session?)", file=sys.stderr)
         return 1
 
+    origin_id = (meta.get("session_id") or os.path.splitext(os.path.basename(a.file))[0]).strip()
+    sessions_dir = os.path.join(a.vault, a.subdir)
     backend = a.cluster
-    try:
-        clustering = clustermod.cluster(steps, backend=backend, model=a.model,
-                                        timeout=a.timeout, lang=a.lang)
-    except clustermod.ClusterError as e:
-        if backend == "claude_cli" and not a.no_fallback:
-            print(f"⚠ 分群({backend})失敗:{e}\n  → 退回時間分段(--cluster time)", file=sys.stderr)
-            clustering = clustermod.cluster(steps, backend="time", lang=a.lang)
-        else:
-            print(f"分群失敗:{e}", file=sys.stderr)
-            return 2
+    clustering = None
+    # 續寫的場次:沿用舊分組,只替新步驟分群,主題名才不會每次同步都整批改掉
+    if backend == "claude_cli" and not a.recluster:
+        prev = _previous_clustering(sessions_dir, origin_id, steps)
+        if prev:
+            try:
+                clustering, n_new = clustermod.cluster_incremental(
+                    steps, prev, model=a.model, timeout=a.timeout, lang=a.lang)
+                print("  (沿用既有分組;" + (f"只替 {n_new} 個新步驟分群)" if n_new
+                                          else "沒有新步驟,未呼叫模型)"))
+            except clustermod.ClusterError as e:
+                clustering, _ = clustermod.cluster_incremental(steps, prev, lang=a.lang, use_model=False)
+                print(f"⚠ 新步驟分群失敗:{e}\n  → 沿用既有分組,新步驟先歸「其他」", file=sys.stderr)
+    if clustering is None:
+        try:
+            clustering = clustermod.cluster(steps, backend=backend, model=a.model,
+                                            timeout=a.timeout, lang=a.lang)
+        except clustermod.ClusterError as e:
+            if backend == "claude_cli" and not a.no_fallback:
+                print(f"⚠ 分群({backend})失敗:{e}\n  → 退回時間分段(--cluster time)", file=sys.stderr)
+                clustering = clustermod.cluster(steps, backend="time", lang=a.lang)
+            else:
+                print(f"分群失敗:{e}", file=sys.stderr)
+                return 2
 
     title = clustering["title"]
     source = meta.get("source", "session")
-    origin_id = (meta.get("session_id") or os.path.splitext(os.path.basename(a.file))[0]).strip()
-    sessions_dir = os.path.join(a.vault, a.subdir)
     removed = _dedupe(sessions_dir, a.vault, a.attachments, origin_id)
     # 重匯預設沿用既有資料夾名:重新分群會產生新標題,跟著改名會讓 wikilink 與外部引用全部失效。
     # 要用新標題命名就加 --rename,或直接給 --slug。
@@ -170,6 +196,8 @@ def main(argv=None) -> int:
     pi.add_argument("--attachments", default="_attachments/sessions", help="where images go (vault-relative)")
     pi.add_argument("--images", action="store_true", help="extract screenshots (default: text-only)")
     pi.add_argument("--slug", default=None, help="override auto name (<date>-<source>-<title>)")
+    pi.add_argument("--recluster", action="store_true",
+                    help="re-cluster the whole session instead of keeping the existing topic grouping")
     pi.add_argument("--rename", action="store_true",
                     help="on re-import, rename the folder from the new title (default: keep the existing name)")
     pi.add_argument("--no-index", action="store_true", help="don't rebuild INDEX.md after import")

@@ -264,3 +264,89 @@ def test_render_numbers_user_and_agent_images_separately(tmp_path):
     render([s], clustering, str(tmp_path / "s"), "slug", str(att), "_att", noimg=False, lang="zh-TW")
     # 使用者的圖仍從 shot_000 起算,不因 agent 截圖穿插而位移
     assert sorted(p.name for p in att.iterdir()) == ["agent_000.png", "agent_001.png", "shot_000.png"]
+
+
+# ── 增量分群:續寫的場次沿用舊分組,只替新步驟分群 ──
+from s2o import cluster as clustermod
+
+
+def _steps(*intents):
+    return [Step(intent=t, asst=[f"答{t}"]) for t in intents]
+
+
+def _render_md(tmp_path, steps, clustering):
+    render(steps, clustering, str(tmp_path / "s"), "slug", str(tmp_path / "att"), "_att",
+           noimg=True, origin_id="sid", source="claude", lang="zh-TW")
+    return (tmp_path / "s" / "slug.md").read_text(encoding="utf-8")
+
+
+def test_load_previous_roundtrip_and_rejects(tmp_path):
+    steps = _steps("q1", "q2", "q3")
+    md = _render_md(tmp_path, steps, {"title": "總標題", "topics": [
+        {"name": "甲", "steps": [1, 3]}, {"name": "乙", "steps": [2]}]})
+    prev = clustermod.load_previous(md, steps + _steps("q4"))     # 舊 3 步 + 新 1 步
+    assert prev == {"title": "總標題", "n": 3,
+                    "topics": [{"name": "甲", "steps": [1, 3]}, {"name": "乙", "steps": [2]}]}
+    # 舊步驟對不上(結構變了)→ 不沿用
+    assert clustermod.load_previous(md, _steps("x1", "x2", "x3")) is None
+    # 舊版是時間分段 → 不沿用,讓它重新做語意分群
+    md_time = _render_md(tmp_path, steps, {"title": "T", "topics": [{"name": "第 1 段 01/01", "steps": [1, 2, 3]}]})
+    assert clustermod.load_previous(md_time, steps) is None
+
+
+def test_cluster_incremental_no_new_steps_skips_model(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("沒有新步驟不該呼叫模型")
+    monkeypatch.setattr(clustermod, "_run_claude", boom)
+    prev = {"title": "T", "n": 2, "topics": [{"name": "甲", "steps": [1, 2]}]}
+    out, n_new = clustermod.cluster_incremental(_steps("q1", "q2"), prev, lang="zh-TW")
+    assert n_new == 0 and out["topics"] == [{"name": "甲", "steps": [1, 2]}]
+
+
+def test_cluster_incremental_merges_new_steps(monkeypatch):
+    seen = {}
+
+    def fake(prompt, model, timeout):
+        seen["prompt"] = prompt
+        # 步 3 延續「甲」;步 4 開新主題;步 5 漏掉 → 併進既有的「其他」
+        return {"topics": [{"name": "甲", "steps": [3]}, {"name": "丙", "steps": [4, 1]}]}
+    monkeypatch.setattr(clustermod, "_run_claude", fake)
+    prev = {"title": "T", "n": 2, "topics": [{"name": "甲", "steps": [1]},
+                                             {"name": "其他 / 未分類", "steps": [2]}]}
+    out, n_new = clustermod.cluster_incremental(_steps("q1", "q2", "q3", "q4", "q5"), prev, lang="zh-TW")
+    assert n_new == 3 and "existing_topics" in seen["prompt"]
+    assert out["title"] == "T"
+    assert out["topics"] == [{"name": "甲", "steps": [1, 3]},
+                             {"name": "其他 / 未分類", "steps": [2, 5]},   # 舊步 1 不會被新主題搶走
+                             {"name": "丙", "steps": [4]}]
+
+
+def test_cli_reimport_keeps_topics_and_only_clusters_new_steps(tmp_path, monkeypatch):
+    from s2o.cli import main
+    calls = []
+
+    def fake(prompt, model, timeout):
+        calls.append("incr" if "existing_topics" in prompt else "full")
+        if "existing_topics" in prompt:
+            return {"topics": [{"name": "新任務", "steps": [3]}]}
+        return {"title": "第一次的標題", "topics": [{"name": "原本的主題", "steps": [1, 2]}]}
+    monkeypatch.setattr(clustermod, "_run_claude", fake)
+
+    def write(n):
+        recs = []
+        for i in range(1, n + 1):
+            recs.append({"type": "user", "sessionId": "sid-x", "message": {"role": "user", "content": f"問題{i}"}})
+            recs.append({"type": "assistant", "sessionId": "sid-x",
+                         "message": {"role": "assistant", "content": [{"type": "text", "text": f"答{i}"}]}})
+        (tmp_path / "s.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
+
+    vault = tmp_path / "v"; vault.mkdir()
+    base = ["import", str(tmp_path / "s.jsonl"), "--vault", str(vault), "--source", "claude",
+            "--no-index", "--lang", "zh-TW", "--slug", "固定名"]
+    write(2); assert main(base) == 0
+    write(3); assert main(base) == 0          # 續寫 1 步
+    assert main(base) == 0                    # 沒有新步驟
+    assert calls == ["full", "incr"]          # 第三次完全沒呼叫模型
+    md = (vault / "90-Meta" / "sessions" / "固定名" / "固定名.md").read_text(encoding="utf-8")
+    assert "# 第一次的標題" in md and "原本的主題" in md and "新任務" in md
+    assert main(base + ["--recluster"]) == 0 and calls[-1] == "full"

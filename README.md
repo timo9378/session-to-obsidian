@@ -44,7 +44,7 @@ s2o import <file> --vault ~/Obsidian --cluster time
 s2o index --vault ~/Obsidian
 ```
 
-Source (Claude native / Copilot append-log) is auto-detected. Output goes to `<vault>/90-Meta/sessions/<date>-<source>-<title>/` with a `.md` (recap) and `.canvas` (topic-grouped node graph). Set `S2O_VAULT` to skip `--vault`; `S2O_LANG` to set a default language. Re-importing the same session replaces the previous note (deduped by an `originSessionId` stored in frontmatter).
+Source (Claude native / Copilot append-log) is auto-detected. Output goes to `<vault>/90-Meta/sessions/<date>-<source>-<title>/` with a `.md` (recap) and `.canvas` (topic-grouped node graph). Set `S2O_VAULT` to skip `--vault`; `S2O_LANG` to set a default language. Re-importing the same session replaces the previous note (deduped by an `originSessionId` stored in frontmatter). When a session has continued since the last import, s2o keeps its folder name and existing topic grouping and only clusters the new steps, so topic names stay stable across syncs; with no new steps it makes no model call at all. Use `--recluster` to re-cluster the whole session, or `--rename` to rename the folder from the new title.
 
 ## How it works
 

@@ -55,3 +55,23 @@ _RULES_NAME = {
 def cluster_rules(lang: str) -> str:
     name_rule = _RULES_NAME.get(lang, _RULES_NAME[DEFAULT_LANG])
     return _RULES_COMMON.replace("7. 不要空主題。", name_rule + "\n7. 不要空主題。")
+
+
+_RULES_INCR = """你是對話主題分群器。這場 AI coding session 之前已經分好主題,後來對話又往下延續了幾步。請把【新步驟】歸到既有主題,或替真正的新任務開新主題。輸入有 existing_topics(既有主題名 + 幾句代表性提問)與 new_steps(新步驟,每步有 intent、files、gist)。
+
+規則(嚴格遵守):
+1. 只處理 new_steps;每個新步驟恰好歸一主題(不重不漏)。
+2. 延續既有主題那條線的步驟 → 用該既有主題名,【一字不差】照抄。
+3. 只有明確是新的任務/問題串才開新主題;別碎到每步一主題。
+4. 複合提問不拆,整步歸主導那條線;files/gist 是消歧訊號。
+{name_rule}
+
+只輸出一段 JSON(無 code fence、無其他文字):
+{"topics":[{"name":"...","steps":[...]}, ...]}
+steps 用 new_steps 裡的原始步號。"""
+
+
+def cluster_incremental_rules(lang: str) -> str:
+    name_rule = _RULES_NAME.get(lang, _RULES_NAME[DEFAULT_LANG]).replace("6. ", "5. ", 1)
+    return _RULES_INCR.replace("{name_rule}", name_rule)
+
